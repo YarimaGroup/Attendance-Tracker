@@ -10,6 +10,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
+import 'package:table_calendar/table_calendar.dart';
+import 'package:geocoding/geocoding.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -26,22 +28,174 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _busy = false;
   String? _status;
 
+  // Calendar related variables
+  DateTime _focusedDay = DateTime.now();
+  DateTime? _selectedDay;
+  Map<DateTime, List<AttendanceEvent>> _events = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedDay = DateTime.now();
+    _loadAttendanceData();
+    _getCurrentLocation(); // Get location on app start
+  }
+
+  Future<void> _getCurrentLocation() async {
+    try {
+      final position = await _getPosition();
+      await _getAddressFromPosition(position);
+
+      setState(() {});
+    } catch (e) {
+      print('Error getting current location: $e');
+    }
+  }
+
+  Future<String> _getAddressFromPosition(Position position) async {
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        position.latitude,
+        position.longitude,
+      );
+
+      if (placemarks.isNotEmpty) {
+        final place = placemarks[0];
+
+        // Build a comprehensive address
+        List<String> addressParts = [];
+
+        if (place.name?.isNotEmpty == true && place.name != place.street) {
+          addressParts.add(place.name!);
+        }
+        if (place.street?.isNotEmpty == true) {
+          addressParts.add(place.street!);
+        }
+        if (place.subLocality?.isNotEmpty == true) {
+          addressParts.add(place.subLocality!);
+        }
+        if (place.locality?.isNotEmpty == true) {
+          addressParts.add(place.locality!);
+        }
+        if (place.administrativeArea?.isNotEmpty == true) {
+          addressParts.add(place.administrativeArea!);
+        }
+        if (place.postalCode?.isNotEmpty == true) {
+          addressParts.add(place.postalCode!);
+        }
+
+        if (addressParts.isNotEmpty) {
+          return addressParts
+              .take(3)
+              .join(', '); // Limit to first 3 parts for readability
+        }
+      }
+    } catch (e) {
+      print('Error getting address: $e');
+    }
+
+    // Fallback to coordinates if address lookup fails
+    return 'Location: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
+  }
+
+  Future<void> _loadAttendanceData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // Load attendance data for current month
+    final start = DateTime(_focusedDay.year, _focusedDay.month, 1);
+    final firstDayNextMonth = DateTime(
+      _focusedDay.year,
+      _focusedDay.month + 1,
+      1,
+    );
+
+    try {
+      final snapshot = await _db
+          .collection('attendanceRecords')
+          .where('uid', isEqualTo: user.uid)
+          .where(
+            'capturedAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(start),
+          )
+          .where(
+            'capturedAt',
+            isLessThan: Timestamp.fromDate(firstDayNextMonth),
+          ) // < next month
+          .orderBy('capturedAt')
+          .get();
+
+      final Map<DateTime, List<AttendanceEvent>> events = {};
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final timestamp = data['capturedAt'] as Timestamp?;
+        final type = data['type'] as String?;
+        final location = data['location'] as Map<String, dynamic>?;
+        final address = data['address'] as String?;
+
+        if (timestamp != null && type != null) {
+          final date = DateTime(
+            timestamp.toDate().year,
+            timestamp.toDate().month,
+            timestamp.toDate().day,
+          );
+
+          final event = AttendanceEvent(
+            type: type,
+            time: timestamp.toDate(),
+            id: doc.id,
+            location: location,
+            address: address,
+          );
+
+          if (events[date] == null) {
+            events[date] = [];
+          }
+          events[date]!.add(event);
+        }
+      }
+
+      setState(() {
+        _events = events;
+      });
+    } catch (e) {
+      print('Error loading attendance data: $e');
+    }
+  }
+
+  List<AttendanceEvent> _getEventsForDay(DateTime day) {
+    return _events[DateTime(day.year, day.month, day.day)] ?? [];
+  }
+
   Future<void> _punch(String type) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     setState(() {
       _busy = true;
-      _status = null;
+      _status = 'Getting location...';
     });
 
     String? tempImagePath;
     try {
-      // 1) Capture selfie (front camera)
+      // 1) Get current location first
+      setState(() {
+        _status = 'Getting location...';
+      });
+
+      final pos = await _getPosition();
+      final address = await _getAddressFromPosition(pos);
+
+      setState(() {
+        _status = 'Taking photo...';
+      });
+
+      // 2) Capture selfie (front camera)
       final XFile? shot = await _picker.pickImage(
         source: ImageSource.camera,
         preferredCameraDevice: CameraDevice.front,
-        imageQuality: 100, // full; we will compress deterministically
+        imageQuality: 85,
       );
       if (shot == null) {
         setState(() => _status = 'Photo capture cancelled');
@@ -49,40 +203,43 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       tempImagePath = shot.path;
 
+      setState(() {
+        _status = 'Processing...';
+      });
+
       final file = File(shot.path);
       if (!await file.exists()) throw Exception('Photo file not found');
       final raw = await file.readAsBytes();
 
-      // 2) Compress for Firestore (target ~700KB) and make a thumb (~144px wide)
+      // 3) Compress images
       final Uint8List photo = await _compressForFirestore(
         raw,
-        maxBytes: 700 * 1024,
+        maxBytes: 500 * 1024,
       );
-      final Uint8List thumb = await _makeThumb(raw, maxBytes: 90 * 1024);
+      final Uint8List thumb = await _makeThumb(raw, maxBytes: 50 * 1024);
 
-      // 3) Location
-      final pos = await _getPosition();
-
-      // 4) Create record doc (thumb only in main doc)
+      // 4) Create record doc
       final recordId = _uuid.v4();
       final docRef = _db.collection('attendanceRecords').doc(recordId);
-      final now = FieldValue.serverTimestamp();
+      final now = DateTime.now();
+      final timestamp = FieldValue.serverTimestamp();
 
       final mainData = {
         'uid': user.uid,
-        'type': type, // 'IN' | 'OUT'
+        'type': type,
         'status': 'SYNCED',
-        'capturedAt': now,
-        'createdAt': now,
+        'capturedAt': timestamp,
+        'createdAt': timestamp,
         'timezone': 'Asia/Kolkata',
         'location': {
           'lat': pos.latitude,
           'lng': pos.longitude,
           'accuracyM': pos.accuracy,
         },
+        'address': address, // Store the address
         'hasPhoto': true,
         'photoDocId': 'photo',
-        'thumb': thumb, // small preview in main doc
+        'thumb': thumb,
       };
 
       await docRef.set(mainData);
@@ -92,15 +249,56 @@ class _HomeScreenState extends State<HomeScreen> {
       final mediaData = {
         'photo': photo,
         'photoMime': 'image/jpeg',
-        'createdAt': now,
+        'createdAt': timestamp,
       };
+
+      final totalDocSize = photo.lengthInBytes + 1000;
+      if (totalDocSize > 1048576) {
+        throw Exception(
+          'Compressed image still too large: $totalDocSize bytes. Try again.',
+        );
+      }
+
       await mediaRef.set(mediaData);
 
+      // 6) Update calendar with new event
+      final today = DateTime(now.year, now.month, now.day);
+      final newEvent = AttendanceEvent(
+        type: type,
+        time: now,
+        id: recordId,
+        location: {
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'accuracyM': pos.accuracy,
+        },
+        address: address,
+      );
+
+      setState(() {
+        if (_events[today] == null) {
+          _events[today] = [];
+        }
+        _events[today]!.add(newEvent);
+        _events[today]!.sort((a, b) => a.time.compareTo(b.time));
+        _status = '$type successful at $address';
+      });
+
       if (!mounted) return;
-      setState(() => _status = '$type successful');
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('$type recorded successfully')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$type recorded successfully'),
+              const SizedBox(height: 4),
+              Text('Location: $address', style: const TextStyle(fontSize: 12)),
+            ],
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     } on PermissionDeniedException catch (e) {
       _showError('Location permission denied: ${e.message}');
     } on FirebaseException catch (e) {
@@ -127,20 +325,37 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     int width = decoded.width;
-    int height = decoded.height;
-    // Start at a practical width to reduce size quickly
-    int targetW = width > 1000 ? 1000 : width;
-    int quality = 80;
+    int targetW = width > 800 ? 800 : width;
+    int quality = 70;
 
     Uint8List out = _encodeJpg(decoded, targetW, quality);
 
-    // Reduce until within budget or limits reached
-    while (out.lengthInBytes > maxBytes && (quality > 45 || targetW > 600)) {
-      if (quality > 45) quality -= 5;
-      if (targetW > 600) targetW = math.max(600, targetW - 100);
+    while (out.lengthInBytes > maxBytes) {
+      if (quality > 30) {
+        quality -= 10;
+      } else if (targetW > 400) {
+        targetW = math.max(400, targetW - 100);
+        quality = 70;
+      } else if (targetW > 300) {
+        targetW = math.max(300, targetW - 50);
+        quality = 60;
+      } else if (quality > 20) {
+        quality -= 5;
+      } else {
+        targetW = math.max(200, targetW - 50);
+        quality = 30;
+      }
+
       out = _encodeJpg(decoded, targetW, quality);
+
+      if (targetW <= 200 && quality <= 20) {
+        break;
+      }
     }
 
+    print(
+      'Compressed image: ${out.lengthInBytes} bytes, width: $targetW, quality: $quality',
+    );
     return out;
   }
 
@@ -213,6 +428,11 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Attendance'),
         actions: [
           IconButton(
+            tooltip: 'Refresh Location',
+            icon: const Icon(Icons.my_location),
+            onPressed: _busy ? null : _getCurrentLocation,
+          ),
+          IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
             onPressed: _busy
@@ -225,6 +445,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
+          // User info section
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Row(
@@ -255,6 +476,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
+
+          // Current Location section
+
+          // Status message
           if (_status != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -269,6 +494,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           const SizedBox(height: 8),
+
+          // Clock In/Out buttons
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
@@ -295,112 +522,244 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 12),
-          const Divider(height: 1),
-          Expanded(child: _RecentRecordsList(uid: user.uid)),
+          const SizedBox(height: 16),
+
+          // Calendar section
+          Expanded(
+            child: Card(
+              margin: const EdgeInsets.all(16),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Attendance Calendar',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 16),
+                    TableCalendar<AttendanceEvent>(
+                      firstDay: DateTime.utc(2020, 1, 1),
+                      lastDay: DateTime.utc(2030, 12, 31),
+                      focusedDay: _focusedDay,
+                      calendarFormat: CalendarFormat.month,
+                      eventLoader: _getEventsForDay,
+                      startingDayOfWeek: StartingDayOfWeek.monday,
+                      selectedDayPredicate: (day) {
+                        return isSameDay(_selectedDay, day);
+                      },
+                      onDaySelected: (selectedDay, focusedDay) {
+                        if (!isSameDay(_selectedDay, selectedDay)) {
+                          setState(() {
+                            _selectedDay = selectedDay;
+                            _focusedDay = focusedDay;
+                          });
+                        }
+                      },
+                      onPageChanged: (focusedDay) {
+                        _focusedDay = focusedDay;
+                        _loadAttendanceData(); // Load data for new month
+                      },
+                      calendarStyle: CalendarStyle(
+                        outsideDaysVisible: false,
+                        weekendTextStyle: TextStyle(color: Colors.red[400]),
+                        holidayTextStyle: TextStyle(color: Colors.red[400]),
+                        markersMaxCount: 2,
+                        markerDecoration: BoxDecoration(
+                          color: Theme.of(context).primaryColor,
+                          shape: BoxShape.circle,
+                        ),
+                        markersAnchor: 1.2,
+                      ),
+                      headerStyle: const HeaderStyle(
+                        formatButtonVisible: false,
+                        titleCentered: true,
+                      ),
+                      calendarBuilders: CalendarBuilders(
+                        markerBuilder: (context, day, events) {
+                          if (events.isEmpty) return null;
+
+                          final attendanceEvents = events
+                              .cast<AttendanceEvent>();
+                          final hasClockIn = attendanceEvents.any(
+                            (e) => e.type == 'IN',
+                          );
+                          final hasClockOut = attendanceEvents.any(
+                            (e) => e.type == 'OUT',
+                          );
+
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (hasClockIn)
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 1,
+                                  ),
+                                  decoration: const BoxDecoration(
+                                    color: Colors.green,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                              if (hasClockOut)
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 1,
+                                  ),
+                                  decoration: const BoxDecoration(
+                                    color: Colors.orange,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Events for selected day
+                    if (_selectedDay != null) ...[
+                      Text(
+                        'Events for ${DateFormat('MMM d, yyyy').format(_selectedDay!)}',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: _buildEventsList(
+                          _getEventsForDay(_selectedDay!),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
-}
 
-class _RecentRecordsList extends StatelessWidget {
-  final String uid;
-  const _RecentRecordsList({required this.uid});
+  Widget _buildEventsList(List<AttendanceEvent> events) {
+    if (events.isEmpty) {
+      return const Center(
+        child: Text(
+          'No attendance records for this day',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
+    }
 
-  @override
-  Widget build(BuildContext context) {
-    final db = FirebaseFirestore.instance;
-    final q = db
-        .collection('attendanceRecords')
-        .where('uid', isEqualTo: uid)
-        .orderBy('capturedAt', descending: true)
-        .limit(30);
+    return ListView.separated(
+      shrinkWrap: true,
+      itemCount: events.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final event = events[index];
+        final color = event.type == 'IN' ? Colors.green : Colors.orange;
+        final icon = event.type == 'IN' ? Icons.login : Icons.logout;
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: q.snapshots(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snap.hasError) {
-          return Center(child: Text('Could not load records: ${snap.error}'));
-        }
-        final docs = snap.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return const Center(child: Text('No punches yet.'));
-        }
-        return ListView.separated(
-          itemCount: docs.length,
-          separatorBuilder: (_, __) => const Divider(height: 1),
-          itemBuilder: (context, i) {
-            final d = docs[i].data();
-            final ts = d['capturedAt'] ?? d['createdAt'];
-            DateTime? t;
-            if (ts is Timestamp) t = ts.toDate();
-            final time = t != null
-                ? DateFormat('MMM d, hh:mm a').format(t)
-                : '—';
-            final type = (d['type'] ?? '').toString();
-            final status = (d['status'] ?? '').toString();
-
-            final Uint8List? thumbBytes = d['thumb'] is Uint8List
-                ? d['thumb'] as Uint8List
-                : null;
-
-            final color = type == 'IN'
-                ? Colors.green
-                : (type == 'OUT' ? Colors.orange : Colors.grey);
-
-            return ListTile(
-              leading: CircleAvatar(
-                backgroundColor: color.withOpacity(0.15),
-                child: Text(
-                  type.isNotEmpty ? type[0] : '?',
-                  style: TextStyle(color: color, fontWeight: FontWeight.bold),
-                ),
-              ),
-              title: Text('$type · $time'),
-              subtitle: Text(status),
-              trailing: (thumbBytes == null)
-                  ? const SizedBox(width: 48, height: 48)
-                  : ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.memory(
-                        thumbBytes,
-                        width: 48,
-                        height: 48,
-                        fit: BoxFit.cover,
+        return Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: color.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Clock ${event.type}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: color,
                       ),
                     ),
-              onTap: () async {
-                // Optional: open full photo from subcollection
-                final docId = (d['photoDocId'] ?? 'photo').toString();
-                final parentId = snap.data!.docs[i].id;
-                final media = await db
-                    .collection('attendanceRecords')
-                    .doc(parentId)
-                    .collection('media')
-                    .doc(docId)
-                    .get();
-                final bytes = media.data()?['photo'];
-                if (bytes is Uint8List) {
-                  // Show full-screen image
-                  // ignore: use_build_context_synchronously
-                  showDialog(
-                    context: context,
-                    builder: (_) => Dialog(
-                      child: InteractiveViewer(child: Image.memory(bytes)),
+                    Text(
+                      DateFormat('hh:mm a').format(event.time),
+                      style: const TextStyle(fontSize: 12),
                     ),
-                  );
-                }
-              },
-            );
-          },
+                    if (event.address != null) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.location_on,
+                            size: 12,
+                            color: Colors.grey[600],
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              event.address!,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[700],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else if (event.location != null) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.location_on,
+                            size: 12,
+                            color: Colors.grey[600],
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              'Lat: ${event.location!['lat'].toStringAsFixed(4)}, '
+                              'Lng: ${event.location!['lng'].toStringAsFixed(4)}',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
   }
+}
+
+class AttendanceEvent {
+  final String type;
+  final DateTime time;
+  final String id;
+  final Map<String, dynamic>? location;
+  final String? address;
+
+  AttendanceEvent({
+    required this.type,
+    required this.time,
+    required this.id,
+    this.location,
+    this.address,
+  });
 }
 
 class PermissionDeniedException implements Exception {
