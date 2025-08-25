@@ -1,3 +1,4 @@
+import 'package:attendance_punch/admin/admin.dart';
 import 'package:attendance_punch/screens/home.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -18,7 +19,20 @@ class AuthGate extends StatelessWidget {
         if (user == null) {
           return const LoginSignUpScreen();
         }
-        return const HomeScreen();
+        return FutureBuilder(
+          future: user.getIdTokenResult(true),
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
+            
+            final claims = snap.data?.claims ?? {};
+            final isAdmin = claims['admin'] == true;
+            return isAdmin ? const AdminPanel() : const HomeScreen();
+          },
+        );
       },
     );
   }

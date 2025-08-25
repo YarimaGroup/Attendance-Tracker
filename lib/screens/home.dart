@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:attendance_punch/screens/event_detail.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -48,7 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       setState(() {});
     } catch (e) {
-      print('Error getting current location: $e');
+      debugPrint('Error getting current location: $e');
     }
   }
 
@@ -91,7 +92,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     } catch (e) {
-      print('Error getting address: $e');
+      debugPrint('Error getting address: $e');
     }
 
     // Fallback to coordinates if address lookup fails
@@ -160,7 +161,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _events = events;
       });
     } catch (e) {
-      print('Error loading attendance data: $e');
+      debugPrint('Error loading attendance data: $e');
     }
   }
 
@@ -353,7 +354,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    print(
+    debugPrint(
       'Compressed image: ${out.lengthInBytes} bytes, width: $targetW, quality: $quality',
     );
     return out;
@@ -398,9 +399,21 @@ class _HomeScreenState extends State<HomeScreen> {
         perm == LocationPermission.deniedForever) {
       throw PermissionDeniedException('Please allow location to punch.');
     }
+
+    // Try cached position first (much faster)
+    try {
+      final lastPosition = await Geolocator.getLastKnownPosition();
+      if (lastPosition != null) {
+        return lastPosition;
+      }
+    } catch (e) {
+      debugPrint('No cached position: $e');
+    }
+
+    // Get fresh position with more reasonable settings
     return Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.best,
-      timeLimit: const Duration(seconds: 12),
+      desiredAccuracy: LocationAccuracy.high, // Changed from best to high
+      timeLimit: const Duration(seconds: 25), // Increased timeout
     );
   }
 
@@ -424,14 +437,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final email = user.email ?? user.uid;
 
     return Scaffold(
+      drawerBarrierDismissible: false,
       appBar: AppBar(
         title: const Text('Attendance'),
         actions: [
-          IconButton(
-            tooltip: 'Refresh Location',
-            icon: const Icon(Icons.my_location),
-            onPressed: _busy ? null : _getCurrentLocation,
-          ),
+          // IconButton(
+          //   tooltip: 'Refresh Location',
+          //   icon: const Icon(Icons.my_location),
+          //   onPressed: _busy ? null : _getCurrentLocation,
+          // ),
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
@@ -664,81 +678,93 @@ class _HomeScreenState extends State<HomeScreen> {
         final color = event.type == 'IN' ? Colors.green : Colors.orange;
         final icon = event.type == 'IN' ? Icons.login : Icons.logout;
 
-        return Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withOpacity(0.3)),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, color: color, size: 20),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Clock ${event.type}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: color,
-                      ),
-                    ),
-                    Text(
-                      DateFormat('hh:mm a').format(event.time),
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    if (event.address != null) ...[
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.location_on,
-                            size: 12,
-                            color: Colors.grey[600],
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              event.address!,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey[700],
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ] else if (event.location != null) ...[
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.location_on,
-                            size: 12,
-                            color: Colors.grey[600],
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              'Lat: ${event.location!['lat'].toStringAsFixed(4)}, '
-                              'Lng: ${event.location!['lng'].toStringAsFixed(4)}',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
+        return InkWell(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) {
+                  return EventDetailPage(recordId: event.id, event: event);
+                },
               ),
-            ],
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: color.withOpacity(0.3)),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, color: color, size: 20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Clock ${event.type}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: color,
+                        ),
+                      ),
+                      Text(
+                        DateFormat('hh:mm a').format(event.time),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      if (event.address != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.location_on,
+                              size: 12,
+                              color: Colors.grey[600],
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                event.address!,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[700],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ] else if (event.location != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.location_on,
+                              size: 12,
+                              color: Colors.grey[600],
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                'Lat: ${event.location!['lat'].toStringAsFixed(4)}, '
+                                'Lng: ${event.location!['lng'].toStringAsFixed(4)}',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
