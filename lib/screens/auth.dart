@@ -1,10 +1,16 @@
-import 'package:attendance_punch/admin/admin.dart';
+import 'package:attendance_punch/admin/panel/admin_panel.dart';
 import 'package:attendance_punch/screens/home.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
+
+  static const Set<String> _adminAllowlist = {
+    'pamacospares@gmail.com',
+    'pamacomkb@gmail.com',
+  };
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
@@ -19,7 +25,9 @@ class AuthGate extends StatelessWidget {
         if (user == null) {
           return const LoginSignUpScreen();
         }
+
         return FutureBuilder(
+          // force refresh so newly-set claims are picked up
           future: user.getIdTokenResult(true),
           builder: (context, snap) {
             if (snap.connectionState == ConnectionState.waiting) {
@@ -27,9 +35,16 @@ class AuthGate extends StatelessWidget {
                 body: Center(child: CircularProgressIndicator()),
               );
             }
-            
+
             final claims = snap.data?.claims ?? {};
-            final isAdmin = claims['admin'] == true;
+            final email = (user.email ?? '').toLowerCase();
+            final isAdminByClaim = claims['admin'] == true;
+            final isAdminByEmail = _adminAllowlist.contains(email);
+            final isAdmin = isAdminByClaim || isAdminByEmail;
+
+            // Optional: debug prints while wiring this up
+            // debugPrint('claims: ${snap.data?.claims} | email: $email | isAdmin=$isAdmin');
+
             return isAdmin ? const AdminPanel() : const HomeScreen();
           },
         );

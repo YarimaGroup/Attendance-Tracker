@@ -1,172 +1,147 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:math' as math;
-import 'dart:typed_data';
-import 'package:attendance_punch/screens/event_detail.dart';
+import 'package:attendance_punch/model/attendance_event.dart';
+import 'package:attendance_punch/repository/attendance_repository.dart';
+import 'package:attendance_punch/services/geolocation_service.dart';
+import 'package:attendance_punch/services/media_service.dart';
+import 'package:attendance_punch/widgets/summary_card.dart';
+import 'package:attendance_punch/widgets/event_detail.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:image/image.dart' as img;
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'package:uuid/uuid.dart';
-import 'package:table_calendar/table_calendar.dart';
-import 'package:geocoding/geocoding.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _db = FirebaseFirestore.instance;
-  final _picker = ImagePicker();
-  final _uuid = const Uuid();
+  final _repo = AttendanceRepository();
+  final _geo = GeolocationService();
+  final _media = MediaService();
 
   bool _busy = false;
   String? _status;
 
-  // Calendar related variables
-  DateTime _focusedDay = DateTime.now();
-  DateTime? _selectedDay;
-  Map<DateTime, List<AttendanceEvent>> _events = {};
+  DateTime _selectedDate = DateTime.now();
+  final List<AttendanceEvent> _events = [];
+
+  // Paging state
+  bool _initialLoading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  Timestamp? _cursor;
 
   @override
   void initState() {
     super.initState();
-    _selectedDay = DateTime.now();
-    _loadAttendanceData();
-    _getCurrentLocation(); // Get location on app start
+    _loadInitial();
+    _prewarmLocation();
   }
 
-  Future<void> _getCurrentLocation() async {
+  Future<void> _prewarmLocation() async {
     try {
-      final position = await _getPosition();
-      await _getAddressFromPosition(position);
-
-      setState(() {});
-    } catch (e) {
-      debugPrint('Error getting current location: $e');
-    }
+      final pos = await _geo.getPosition();
+      await _geo.addressFromPosition(pos);
+      if (mounted) setState(() {});
+    } catch (_) {}
   }
 
-  Future<String> _getAddressFromPosition(Position position) async {
-    try {
-      List<Placemark> placemarks = await placemarkFromCoordinates(
-        position.latitude,
-        position.longitude,
-      );
-
-      if (placemarks.isNotEmpty) {
-        final place = placemarks[0];
-
-        // Build a comprehensive address
-        List<String> addressParts = [];
-
-        if (place.name?.isNotEmpty == true && place.name != place.street) {
-          addressParts.add(place.name!);
-        }
-        if (place.street?.isNotEmpty == true) {
-          addressParts.add(place.street!);
-        }
-        if (place.subLocality?.isNotEmpty == true) {
-          addressParts.add(place.subLocality!);
-        }
-        if (place.locality?.isNotEmpty == true) {
-          addressParts.add(place.locality!);
-        }
-        if (place.administrativeArea?.isNotEmpty == true) {
-          addressParts.add(place.administrativeArea!);
-        }
-        if (place.postalCode?.isNotEmpty == true) {
-          addressParts.add(place.postalCode!);
-        }
-
-        if (addressParts.isNotEmpty) {
-          return addressParts
-              .take(3)
-              .join(', '); // Limit to first 3 parts for readability
-        }
-      }
-    } catch (e) {
-      debugPrint('Error getting address: $e');
-    }
-
-    // Fallback to coordinates if address lookup fails
-    return 'Location: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
+  bool _isToday() {
+    final now = DateTime.now();
+    return _sameDay(_selectedDate, now);
   }
 
-  Future<void> _loadAttendanceData() async {
+  String _dateDisplay() {
+    final now = DateTime.now();
+    final yesterday = now.subtract(const Duration(days: 1));
+    final tomorrow = now.add(const Duration(days: 1));
+    if (_isToday()) return 'Today';
+    if (_sameDay(_selectedDate, yesterday)) return 'Yesterday';
+    if (_sameDay(_selectedDate, tomorrow)) return 'Tomorrow';
+    return DateFormat('MMM d, yyyy').format(_selectedDate);
+  }
+
+  bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  Future<void> _loadInitial() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-
-    // Load attendance data for current month
-    final start = DateTime(_focusedDay.year, _focusedDay.month, 1);
-    final firstDayNextMonth = DateTime(
-      _focusedDay.year,
-      _focusedDay.month + 1,
-      1,
-    );
-
+    setState(() {
+      _initialLoading = true;
+      _events.clear();
+      _cursor = null;
+      _hasMore = true;
+    });
     try {
-      final snapshot = await _db
-          .collection('attendanceRecords')
-          .where('uid', isEqualTo: user.uid)
-          .where(
-            'capturedAt',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(start),
-          )
-          .where(
-            'capturedAt',
-            isLessThan: Timestamp.fromDate(firstDayNextMonth),
-          ) // < next month
-          .orderBy('capturedAt')
-          .get();
-
-      final Map<DateTime, List<AttendanceEvent>> events = {};
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final timestamp = data['capturedAt'] as Timestamp?;
-        final type = data['type'] as String?;
-        final location = data['location'] as Map<String, dynamic>?;
-        final address = data['address'] as String?;
-
-        if (timestamp != null && type != null) {
-          final date = DateTime(
-            timestamp.toDate().year,
-            timestamp.toDate().month,
-            timestamp.toDate().day,
-          );
-
-          final event = AttendanceEvent(
-            type: type,
-            time: timestamp.toDate(),
-            id: doc.id,
-            location: location,
-            address: address,
-          );
-
-          if (events[date] == null) {
-            events[date] = [];
-          }
-          events[date]!.add(event);
-        }
-      }
-
+      final page = await _repo.eventsForDatePaged(
+        _selectedDate,
+        user.uid,
+        limit: 20,
+      );
       setState(() {
-        _events = events;
+        _events.addAll(page.events);
+        _cursor = page.nextCursor;
+        _hasMore = page.hasMore;
       });
     } catch (e) {
       debugPrint('Error loading attendance data: $e');
+    } finally {
+      if (mounted) setState(() => _initialLoading = false);
     }
   }
 
-  List<AttendanceEvent> _getEventsForDay(DateTime day) {
-    return _events[DateTime(day.year, day.month, day.day)] ?? [];
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    setState(() => _loadingMore = true);
+    try {
+      final page = await _repo.eventsForDatePaged(
+        _selectedDate,
+        user.uid,
+        limit: 20,
+        startAfter: _cursor,
+      );
+      setState(() {
+        _events.addAll(page.events);
+        _cursor = page.nextCursor;
+        _hasMore = page.hasMore;
+      });
+    } catch (e) {
+      debugPrint('Error loading more: $e');
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  void _changeDate(int days) {
+    setState(() => _selectedDate = _selectedDate.add(Duration(days: days)));
+    _loadInitial();
+  }
+
+  void _goToToday() {
+    setState(() => _selectedDate = DateTime.now());
+    _loadInitial();
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final initial = _selectedDate.isAfter(now) ? now : _selectedDate;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year - 2),
+      lastDate: now,
+      helpText: 'Jump to date',
+    );
+    if (picked != null && !_sameDay(picked, _selectedDate)) {
+      setState(() => _selectedDate = picked);
+      _loadInitial();
+    }
   }
 
   Future<void> _punch(String type) async {
@@ -178,619 +153,641 @@ class _HomeScreenState extends State<HomeScreen> {
       _status = 'Getting location...';
     });
 
-    String? tempImagePath;
+    String? tempPath;
     try {
-      // 1) Get current location first
-      setState(() {
-        _status = 'Getting location...';
-      });
+      final pos = await _geo.getPosition();
+      final address = await _geo.addressFromPosition(pos);
 
-      final pos = await _getPosition();
-      final address = await _getAddressFromPosition(pos);
+      setState(() => _status = 'Taking photo...');
 
-      setState(() {
-        _status = 'Taking photo...';
-      });
-
-      // 2) Capture selfie (front camera)
-      final XFile? shot = await _picker.pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.front,
-        imageQuality: 85,
-      );
+      final shot = await _media.takeFrontCameraPhoto();
       if (shot == null) {
         setState(() => _status = 'Photo capture cancelled');
         return;
       }
-      tempImagePath = shot.path;
+      tempPath = shot.path;
 
-      setState(() {
-        _status = 'Processing...';
-      });
+      setState(() => _status = 'Processing...');
 
-      final file = File(shot.path);
-      if (!await file.exists()) throw Exception('Photo file not found');
-      final raw = await file.readAsBytes();
-
-      // 3) Compress images
-      final Uint8List photo = await _compressForFirestore(
+      final raw = await _media.readBytes(shot.path);
+      final Uint8List photo = await _media.compressForFirestore(
         raw,
         maxBytes: 500 * 1024,
       );
-      final Uint8List thumb = await _makeThumb(raw, maxBytes: 50 * 1024);
+      final Uint8List thumb = await _media.makeThumb(raw, maxBytes: 50 * 1024);
 
-      // 4) Create record doc
-      final recordId = _uuid.v4();
-      final docRef = _db.collection('attendanceRecords').doc(recordId);
-      final now = DateTime.now();
-      final timestamp = FieldValue.serverTimestamp();
-
-      final mainData = {
-        'uid': user.uid,
-        'type': type,
-        'status': 'SYNCED',
-        'capturedAt': timestamp,
-        'createdAt': timestamp,
-        'timezone': 'Asia/Kolkata',
-        'location': {
-          'lat': pos.latitude,
-          'lng': pos.longitude,
-          'accuracyM': pos.accuracy,
-        },
-        'address': address, // Store the address
-        'hasPhoto': true,
-        'photoDocId': 'photo',
-        'thumb': thumb,
-      };
-
-      await docRef.set(mainData);
-
-      // 5) Store full selfie bytes in subcollection doc
-      final mediaRef = docRef.collection('media').doc('photo');
-      final mediaData = {
-        'photo': photo,
-        'photoMime': 'image/jpeg',
-        'createdAt': timestamp,
-      };
-
-      final totalDocSize = photo.lengthInBytes + 1000;
-      if (totalDocSize > 1048576) {
-        throw Exception(
-          'Compressed image still too large: $totalDocSize bytes. Try again.',
-        );
-      }
-
-      await mediaRef.set(mediaData);
-
-      // 6) Update calendar with new event
-      final today = DateTime(now.year, now.month, now.day);
-      final newEvent = AttendanceEvent(
+      await _repo.createPunch(
         type: type,
-        time: now,
-        id: recordId,
+        uid: user.uid,
+        userEmail: user.email, // NEW
+        userDisplayName: user.displayName, // NEW
         location: {
           'lat': pos.latitude,
           'lng': pos.longitude,
           'accuracyM': pos.accuracy,
         },
         address: address,
+        photo: photo,
+        thumb: thumb,
       );
 
-      setState(() {
-        if (_events[today] == null) {
-          _events[today] = [];
-        }
-        _events[today]!.add(newEvent);
-        _events[today]!.sort((a, b) => a.time.compareTo(b.time));
-        _status = '$type successful at $address';
-      });
+      if (_isToday()) await _loadInitial();
 
+      setState(() => _status = '$type successful at $address');
       if (!mounted) return;
+      HapticFeedback.mediumImpact();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+          behavior: SnackBarBehavior.floating,
+          showCloseIcon: true,
+          content: Row(
             children: [
-              Text('$type recorded successfully'),
-              const SizedBox(height: 4),
-              Text('Location: $address', style: const TextStyle(fontSize: 12)),
+              Icon(type == 'IN' ? Icons.login : Icons.logout),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$type recorded successfully',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Location: $address',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-          duration: const Duration(seconds: 4),
         ),
       );
-    } on PermissionDeniedException catch (e) {
-      _showError('Location permission denied: ${e.message}');
-    } on FirebaseException catch (e) {
-      _showError('Firebase error: ${e.message ?? e.code}');
     } catch (e) {
-      _showError('Could not complete: $e');
-    } finally {
-      if (tempImagePath != null) _cleanupTempFile(tempImagePath);
-      if (mounted) {
-        setState(() {
-          _busy = false;
-        });
-      }
-    }
-  }
-
-  Future<Uint8List> _compressForFirestore(
-    Uint8List input, {
-    required int maxBytes,
-  }) async {
-    final decoded = img.decodeImage(input);
-    if (decoded == null) {
-      throw Exception('Invalid image');
-    }
-
-    int width = decoded.width;
-    int targetW = width > 800 ? 800 : width;
-    int quality = 70;
-
-    Uint8List out = _encodeJpg(decoded, targetW, quality);
-
-    while (out.lengthInBytes > maxBytes) {
-      if (quality > 30) {
-        quality -= 10;
-      } else if (targetW > 400) {
-        targetW = math.max(400, targetW - 100);
-        quality = 70;
-      } else if (targetW > 300) {
-        targetW = math.max(300, targetW - 50);
-        quality = 60;
-      } else if (quality > 20) {
-        quality -= 5;
-      } else {
-        targetW = math.max(200, targetW - 50);
-        quality = 30;
-      }
-
-      out = _encodeJpg(decoded, targetW, quality);
-
-      if (targetW <= 200 && quality <= 20) {
-        break;
-      }
-    }
-
-    debugPrint(
-      'Compressed image: ${out.lengthInBytes} bytes, width: $targetW, quality: $quality',
-    );
-    return out;
-  }
-
-  Uint8List _encodeJpg(img.Image decoded, int width, int quality) {
-    final resized = img.copyResize(decoded, width: width);
-    return Uint8List.fromList(img.encodeJpg(resized, quality: quality));
-  }
-
-  Future<Uint8List> _makeThumb(Uint8List input, {required int maxBytes}) async {
-    final decoded = img.decodeImage(input);
-    if (decoded == null) {
-      throw Exception('Invalid image');
-    }
-    int w = 144;
-    int q = 60;
-    Uint8List out = Uint8List.fromList(
-      img.encodeJpg(img.copyResize(decoded, width: w), quality: q),
-    );
-    while (out.lengthInBytes > maxBytes && (q > 40 || w > 96)) {
-      if (q > 40) q -= 5;
-      if (w > 96) w -= 16;
-      out = Uint8List.fromList(
-        img.encodeJpg(img.copyResize(decoded, width: w), quality: q),
+      setState(() => _status = 'Could not complete: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          showCloseIcon: true,
+          content: Text('Error: $e'),
+        ),
       );
+    } finally {
+      _media.cleanupTemp(tempPath);
+      if (mounted) setState(() => _busy = false);
     }
-    return out;
   }
 
-  Future<Position> _getPosition() async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      throw PermissionDeniedException('Location services are disabled.');
-    }
-
-    var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
-    }
-    if (perm == LocationPermission.denied ||
-        perm == LocationPermission.deniedForever) {
-      throw PermissionDeniedException('Please allow location to punch.');
-    }
-
-    // Try cached position first (much faster)
-    try {
-      final lastPosition = await Geolocator.getLastKnownPosition();
-      if (lastPosition != null) {
-        return lastPosition;
-      }
-    } catch (e) {
-      debugPrint('No cached position: $e');
-    }
-
-    // Get fresh position with more reasonable settings
-    return Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.high, // Changed from best to high
-      timeLimit: const Duration(seconds: 25), // Increased timeout
+  Future<void> _confirmAndSignOut() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign out?'),
+        content: const Text(
+          'You will need to sign in again to record attendance.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
     );
-  }
 
-  void _cleanupTempFile(String? path) {
-    if (path == null) return;
-    try {
-      final f = File(path);
-      if (f.existsSync()) f.deleteSync();
-    } catch (_) {}
-  }
-
-  void _showError(String msg) {
-    if (!mounted) return;
-    setState(() => _status = msg);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    if (confirmed == true) {
+      await FirebaseAuth.instance.signOut();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser!;
     final email = user.email ?? user.uid;
+    final canGoForward = !_isToday();
 
     return Scaffold(
       drawerBarrierDismissible: false,
       appBar: AppBar(
         title: const Text('Attendance'),
         actions: [
-          // IconButton(
-          //   tooltip: 'Refresh Location',
-          //   icon: const Icon(Icons.my_location),
-          //   onPressed: _busy ? null : _getCurrentLocation,
-          // ),
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
-            onPressed: _busy
-                ? null
-                : () async {
-                    await FirebaseAuth.instance.signOut();
-                  },
+            onPressed: _busy ? null : _confirmAndSignOut,
           ),
         ],
+        bottom: _busy
+            ? const PreferredSize(
+                preferredSize: Size.fromHeight(3),
+                child: LinearProgressIndicator(minHeight: 3),
+              )
+            : null,
       ),
-      body: Column(
-        children: [
-          // User info section
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
-              children: [
-                const CircleAvatar(child: Icon(Icons.person)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+      body: RefreshIndicator(
+        onRefresh: _loadInitial,
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            if (n.metrics.pixels > n.metrics.maxScrollExtent - 200) {
+              _loadMore();
+            }
+            return false;
+          },
+          child: CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Row(
                     children: [
-                      Text(
-                        user.displayName ?? 'Hello!',
-                        style: Theme.of(context).textTheme.titleMedium,
+                      const CircleAvatar(child: Icon(Icons.person)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              user.displayName ?? 'Hello!',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            Text(
+                              email,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
                       ),
-                      Text(email, style: Theme.of(context).textTheme.bodySmall),
+                      if (_busy)
+                        const Padding(
+                          padding: EdgeInsets.only(right: 8),
+                          child: SizedBox(
+                            height: 22,
+                            width: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
                     ],
                   ),
                 ),
-                if (_busy)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 8),
-                    child: SizedBox(
-                      height: 22,
-                      width: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+
+              // Status line (animated)
+              SliverToBoxAdapter(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  child: _status == null
+                      ? const SizedBox.shrink()
+                      : Padding(
+                          key: ValueKey(_status),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              _status!,
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.secondary,
+                              ),
+                            ),
+                          ),
+                        ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 8)),
+
+              // Punch buttons (only today)
+              if (_isToday())
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: AnimatedScale(
+                            duration: const Duration(milliseconds: 180),
+                            scale: _busy ? 0.98 : 1.0,
+                            child: FilledButton.icon(
+                              onPressed: _busy ? null : () => _punch('IN'),
+                              icon: const Icon(Icons.login),
+                              label: const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 14),
+                                child: Text('Clock In'),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: AnimatedScale(
+                            duration: const Duration(milliseconds: 180),
+                            scale: _busy ? 0.98 : 1.0,
+                            child: OutlinedButton.icon(
+                              onPressed: _busy ? null : () => _punch('OUT'),
+                              icon: const Icon(Icons.logout),
+                              label: const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 14),
+                                child: Text('Clock Out'),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-              ],
-            ),
-          ),
+                ),
+              if (_isToday())
+                const SliverToBoxAdapter(child: SizedBox(height: 16)),
 
-          // Current Location section
-
-          // Status message
-          if (_status != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  _status!,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.secondary,
+              // Date nav + picker
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: _pickDate,
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            IconButton(
+                              onPressed: () => _changeDate(-1),
+                              icon: const Icon(Icons.chevron_left),
+                              tooltip: 'Previous day',
+                            ),
+                            Expanded(
+                              child: Column(
+                                children: [
+                                  Text(
+                                    _dateDisplay(),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.bold),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  if (!_isToday())
+                                    Text(
+                                      DateFormat('EEEE').format(_selectedDate),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Tap to pick a date',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: canGoForward
+                                  ? () => _changeDate(1)
+                                  : null,
+                              icon: const Icon(Icons.chevron_right),
+                              tooltip: canGoForward
+                                  ? 'Next day'
+                                  : 'Cannot go beyond today',
+                            ),
+                            if (!_isToday()) ...[
+                              const SizedBox(width: 8),
+                              TextButton(
+                                onPressed: _goToToday,
+                                child: const Text('Today'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          const SizedBox(height: 8),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
 
-          // Clock In/Out buttons
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _busy ? null : () => _punch('IN'),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 14),
-                      child: Text('Clock In'),
-                    ),
+              // Summary (fade in)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 250),
+                    opacity: _initialLoading ? 0.6 : 1.0,
+                    child: SummaryCard(events: _events),
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _busy ? null : () => _punch('OUT'),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 14),
-                      child: Text('Clock Out'),
-                    ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+
+              // Header row with count
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.list_alt, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Detailed Records',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const Spacer(),
+                      if (_events.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).primaryColor.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            '${_events.length}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).primaryColor,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-              ],
-            ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 12)),
+
+              // Events list (paged)
+              if (_initialLoading)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: _SkeletonList(),
+                  ),
+                )
+              else if (_events.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _EmptyState(
+                      isToday: _isToday(),
+                      onPunchIn: _busy ? null : () => _punch('IN'),
+                    ),
+                  ),
+                )
+              else
+                SliverList.builder(
+                  itemCount: _events.length,
+                  itemBuilder: (context, index) {
+                    final event = _events[index];
+                    return Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        index == 0 ? 0 : 8,
+                        16,
+                        8,
+                      ),
+                      child: _AnimatedEventTile(event: event),
+                    );
+                  },
+                ),
+
+              // Load more indicator / spacer
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Center(
+                    child: _loadingMore
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : (!_hasMore
+                              ? const Text('— End of day —')
+                              : const SizedBox.shrink()),
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 16),
+        ),
+      ),
+    );
+  }
+}
 
-          // Calendar section
-          Expanded(
-            child: Card(
-              margin: const EdgeInsets.all(16),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
+class _AnimatedEventTile extends StatelessWidget {
+  final AttendanceEvent event;
+  const _AnimatedEventTile({required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = event.type == 'IN' ? Colors.green : Colors.orange;
+    final icon = event.type == 'IN' ? Icons.login : Icons.logout;
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+      builder: (context, v, child) {
+        return Opacity(
+          opacity: v,
+          child: Transform.translate(
+            offset: Offset(0, (1 - v) * 12),
+            child: child,
+          ),
+        );
+      },
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => EventDetailPage(recordId: event.id, event: event),
+            ),
+          );
+        },
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: color.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Attendance Calendar',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 16),
-                    TableCalendar<AttendanceEvent>(
-                      firstDay: DateTime.utc(2020, 1, 1),
-                      lastDay: DateTime.utc(2030, 12, 31),
-                      focusedDay: _focusedDay,
-                      calendarFormat: CalendarFormat.month,
-                      eventLoader: _getEventsForDay,
-                      startingDayOfWeek: StartingDayOfWeek.monday,
-                      selectedDayPredicate: (day) {
-                        return isSameDay(_selectedDay, day);
-                      },
-                      onDaySelected: (selectedDay, focusedDay) {
-                        if (!isSameDay(_selectedDay, selectedDay)) {
-                          setState(() {
-                            _selectedDay = selectedDay;
-                            _focusedDay = focusedDay;
-                          });
-                        }
-                      },
-                      onPageChanged: (focusedDay) {
-                        _focusedDay = focusedDay;
-                        _loadAttendanceData(); // Load data for new month
-                      },
-                      calendarStyle: CalendarStyle(
-                        outsideDaysVisible: false,
-                        weekendTextStyle: TextStyle(color: Colors.red[400]),
-                        holidayTextStyle: TextStyle(color: Colors.red[400]),
-                        markersMaxCount: 2,
-                        markerDecoration: BoxDecoration(
-                          color: Theme.of(context).primaryColor,
-                          shape: BoxShape.circle,
+                    Row(
+                      children: [
+                        Text(
+                          'Clock ${event.type}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: color,
+                          ),
                         ),
-                        markersAnchor: 1.2,
-                      ),
-                      headerStyle: const HeaderStyle(
-                        formatButtonVisible: false,
-                        titleCentered: true,
-                      ),
-                      calendarBuilders: CalendarBuilders(
-                        markerBuilder: (context, day, events) {
-                          if (events.isEmpty) return null;
-
-                          final attendanceEvents = events
-                              .cast<AttendanceEvent>();
-                          final hasClockIn = attendanceEvents.any(
-                            (e) => e.type == 'IN',
-                          );
-                          final hasClockOut = attendanceEvents.any(
-                            (e) => e.type == 'OUT',
-                          );
-
-                          return Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (hasClockIn)
-                                Container(
-                                  width: 6,
-                                  height: 6,
-                                  margin: const EdgeInsets.symmetric(
-                                    horizontal: 1,
-                                  ),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.green,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                              if (hasClockOut)
-                                Container(
-                                  width: 6,
-                                  height: 6,
-                                  margin: const EdgeInsets.symmetric(
-                                    horizontal: 1,
-                                  ),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.orange,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Events for selected day
-                    if (_selectedDay != null) ...[
-                      Text(
-                        'Events for ${DateFormat('MMM d, yyyy').format(_selectedDay!)}',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Expanded(
-                        child: _buildEventsList(
-                          _getEventsForDay(_selectedDay!),
+                        const Spacer(),
+                        Text(
+                          DateFormat('hh:mm a').format(event.time),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
+                      ],
+                    ),
+                    if (event.address != null) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.location_on,
+                            size: 12,
+                            color: Colors.grey[600],
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              event.address!,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[700],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else if (event.location != null) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.location_on,
+                            size: 12,
+                            color: Colors.grey[600],
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              'Lat: ${event.location!['lat'].toStringAsFixed(4)}, Lng: ${event.location!['lng'].toStringAsFixed(4)}',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
+              Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey[400]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  final bool isToday;
+  final VoidCallback? onPunchIn;
+  const _EmptyState({required this.isToday, this.onPunchIn});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.event_busy, size: 56, color: Colors.grey[400]),
+        const SizedBox(height: 12),
+        Text(
+          isToday ? "You're all set for today" : 'No attendance records',
+          style: TextStyle(
+            color: Colors.grey[700],
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          isToday
+              ? 'Start the day by clocking in.'
+              : 'Pick another date or go back to today.',
+          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+        ),
+        const SizedBox(height: 16),
+        if (isToday)
+          FilledButton.icon(
+            onPressed: onPunchIn,
+            icon: const Icon(Icons.login),
+            label: const Text('Clock In Now'),
+          ),
+      ],
+    );
+  }
+}
+
+class _SkeletonList extends StatelessWidget {
+  const _SkeletonList();
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: List.generate(6, (i) => const _SkeletonTile()).toList(),
+    );
+  }
+}
+
+class _SkeletonTile extends StatelessWidget {
+  const _SkeletonTile();
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: Colors.black12,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Container(
+              height: 56,
+              decoration: BoxDecoration(
+                color: Colors.black12,
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
           ),
         ],
       ),
     );
   }
-
-  Widget _buildEventsList(List<AttendanceEvent> events) {
-    if (events.isEmpty) {
-      return const Center(
-        child: Text(
-          'No attendance records for this day',
-          style: TextStyle(color: Colors.grey),
-        ),
-      );
-    }
-
-    return ListView.separated(
-      shrinkWrap: true,
-      itemCount: events.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        final event = events[index];
-        final color = event.type == 'IN' ? Colors.green : Colors.orange;
-        final icon = event.type == 'IN' ? Icons.login : Icons.logout;
-
-        return InkWell(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) {
-                  return EventDetailPage(recordId: event.id, event: event);
-                },
-              ),
-            );
-          },
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: color.withOpacity(0.3)),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, color: color, size: 20),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Clock ${event.type}',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: color,
-                        ),
-                      ),
-                      Text(
-                        DateFormat('hh:mm a').format(event.time),
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      if (event.address != null) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.location_on,
-                              size: 12,
-                              color: Colors.grey[600],
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                event.address!,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.grey[700],
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ] else if (event.location != null) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.location_on,
-                              size: 12,
-                              color: Colors.grey[600],
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                'Lat: ${event.location!['lat'].toStringAsFixed(4)}, '
-                                'Lng: ${event.location!['lng'].toStringAsFixed(4)}',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class AttendanceEvent {
-  final String type;
-  final DateTime time;
-  final String id;
-  final Map<String, dynamic>? location;
-  final String? address;
-
-  AttendanceEvent({
-    required this.type,
-    required this.time,
-    required this.id,
-    this.location,
-    this.address,
-  });
-}
-
-class PermissionDeniedException implements Exception {
-  final String message;
-  PermissionDeniedException(this.message);
-  @override
-  String toString() => message;
 }
