@@ -7,9 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:150381440101:android:32595c0cd1eddfe4116a8c",
+        "mobilesdk_app_id": "1:150381440101:android:8f337ea16ba7c667116a8c",
         "android_client_info": {
-          "package_name": "com.example.attendance_punch"
+          "package_name": "yarima.tracker"
         }
       },
       "oauth_client": [],

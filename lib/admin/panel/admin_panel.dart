@@ -1,21 +1,24 @@
 import 'dart:async';
-
-import 'package:attendance_punch/admin/panel/model.dart';
-import 'package:attendance_punch/admin/panel/utils.dart';
-import 'package:attendance_punch/admin/panel/widgets/filter_panel.dart';
-import 'package:attendance_punch/admin/panel/widgets/group_card.dart';
-import 'package:attendance_punch/admin/panel/widgets/load_more.dart';
-import 'package:attendance_punch/admin/panel/widgets/record_tile.dart';
-import 'package:attendance_punch/admin/panel/widgets/summary_panel.dart';
-import 'package:attendance_punch/model/attendance_event.dart';
-import 'package:attendance_punch/widgets/event_detail.dart';
+import 'package:attendance_tracker/admin/panel/model.dart';
+import 'package:attendance_tracker/admin/panel/utils.dart';
+import 'package:attendance_tracker/admin/panel/widgets/filter_panel.dart';
+import 'package:attendance_tracker/admin/panel/widgets/group_card.dart';
+import 'package:attendance_tracker/admin/panel/widgets/load_more.dart';
+import 'package:attendance_tracker/admin/panel/widgets/record_tile.dart';
+import 'package:attendance_tracker/admin/panel/widgets/summary_panel.dart';
+import 'package:attendance_tracker/model/attendance_event.dart';
+import 'package:attendance_tracker/widgets/event_detail.dart';
+import 'package:attendance_tracker/widgets/responsive_widget.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'
-    show FirebaseFirestore, Query, QueryDocumentSnapshot, DocumentSnapshot, Timestamp;
+    show
+        FirebaseFirestore,
+        Query,
+        QueryDocumentSnapshot,
+        DocumentSnapshot,
+        Timestamp;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-
-
 
 class AdminPanel extends StatefulWidget {
   const AdminPanel({super.key});
@@ -23,7 +26,8 @@ class AdminPanel extends StatefulWidget {
   State<AdminPanel> createState() => _AdminPanelState();
 }
 
-class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateMixin {
+class _AdminPanelState extends State<AdminPanel>
+    with SingleTickerProviderStateMixin {
   final _db = FirebaseFirestore.instance;
 
   // Filters
@@ -74,8 +78,14 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
   }
 
   Query<Map<String, dynamic>> _buildQuery() {
-    final startTs = Timestamp.fromDate(DateTime(_from.year, _from.month, _from.day));
-    final endExclusive = DateTime(_to.year, _to.month, _to.day).add(const Duration(days: 1));
+    final startTs = Timestamp.fromDate(
+      DateTime(_from.year, _from.month, _from.day),
+    );
+    final endExclusive = DateTime(
+      _to.year,
+      _to.month,
+      _to.day,
+    ).add(const Duration(days: 1));
     final endTs = Timestamp.fromDate(endExclusive);
 
     Query<Map<String, dynamic>> q = _db
@@ -141,12 +151,17 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
       context: context,
       firstDate: DateTime(2020, 1, 1),
       lastDate: now,
-      initialDateRange: DateTimeRange(start: _from, end: _to.isAfter(now) ? now : _to),
+      initialDateRange: DateTimeRange(
+        start: _from,
+        end: _to.isAfter(now) ? now : _to,
+      ),
       helpText: 'Select date range',
     );
     if (res != null) {
       setState(() {
-        _from = res.start; _to = res.end; _showFilters = false;
+        _from = res.start;
+        _to = res.end;
+        _showFilters = false;
       });
       _runInitialQuery();
     }
@@ -157,10 +172,18 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Sign out?'),
-        content: const Text('You will need to sign in again to manage attendance.'),
+        content: const Text(
+          'You will need to sign in again to manage attendance.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Sign out')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Sign out'),
+          ),
         ],
       ),
     );
@@ -181,12 +204,24 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
         actions: [
           IconButton(
             tooltip: 'Toggle Filters',
-            icon: Icon(_showFilters ? Icons.filter_alt : Icons.filter_alt_outlined,
-                color: _showFilters ? Theme.of(context).colorScheme.primary : null),
+            icon: Icon(
+              _showFilters ? Icons.filter_alt : Icons.filter_alt_outlined,
+              color: _showFilters
+                  ? Theme.of(context).colorScheme.primary
+                  : null,
+            ),
             onPressed: () => setState(() => _showFilters = !_showFilters),
           ),
-          IconButton(tooltip: 'Refresh', icon: const Icon(Icons.refresh), onPressed: _loading ? null : _runInitialQuery),
-          IconButton(tooltip: 'Sign out', icon: const Icon(Icons.logout), onPressed: _confirmAndSignOut),
+          IconButton(
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh),
+            onPressed: _loading ? null : _runInitialQuery,
+          ),
+          IconButton(
+            tooltip: 'Sign out',
+            icon: const Icon(Icons.logout),
+            onPressed: _confirmAndSignOut,
+          ),
         ],
       ),
       body: RefreshIndicator(
@@ -194,7 +229,7 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
         child: CustomScrollView(
           slivers: [
             if (_showFilters)
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: AdminFilterPanel(
                   rangeLabel: rangeLabel(_from, _to),
                   onPickRange: _pickRange,
@@ -209,7 +244,7 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
               ),
 
             if (_rows.isNotEmpty && !_loading)
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: SummaryPanel(
                   rows: _rows,
                   groupByUser: _groupByUser,
@@ -235,14 +270,19 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
                   itemCount: (grouped?.length ?? 0) + 1,
                   itemBuilder: (context, index) {
                     if (index == grouped!.length) {
-                      return LoadMore(hasMore: _hasMore, loading: _loading, onLoadMore: _loadMore);
+                      return LoadMore(
+                        hasMore: _hasMore,
+                        loading: _loading,
+                        onLoadMore: _loadMore,
+                      );
                     }
                     final g = grouped[index];
                     final expanded = _expanded[g.id] ?? true;
                     return GroupCard(
                       group: g,
                       expanded: expanded,
-                      onToggle: () => setState(() => _expanded[g.id] = !expanded),
+                      onToggle: () =>
+                          setState(() => _expanded[g.id] = !expanded),
                       dfDate: _dfDate,
                       dfTime: _dfTime,
                       buildTile: (doc) => RecordTile(
@@ -264,7 +304,11 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
                   separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     if (index == _rows.length) {
-                      return LoadMore(hasMore: _hasMore, loading: _loading, onLoadMore: _loadMore);
+                      return LoadMore(
+                        hasMore: _hasMore,
+                        loading: _loading,
+                        onLoadMore: _loadMore,
+                      );
                     }
                     return Card(
                       child: RecordTile(
@@ -287,7 +331,10 @@ class _AdminPanelState extends State<AdminPanel> with SingleTickerProviderStateM
     final data = doc.data();
     final type = (data['type'] as String?) ?? '?';
     final ts = data['capturedAt'] as Timestamp?;
-    final time = ts?.toDate() ?? (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final time =
+        ts?.toDate() ??
+        (data['createdAt'] as Timestamp?)?.toDate() ??
+        DateTime.fromMillisecondsSinceEpoch(0);
     final address = data['address'] as String?;
 
     Navigator.push(
@@ -316,42 +363,25 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.inbox_outlined, size: 64, color: Theme.of(context).colorScheme.outline),
+          Icon(
+            Icons.inbox_outlined,
+            size: 64,
+            color: Theme.of(context).colorScheme.outline,
+          ),
           const SizedBox(height: 16),
-          Text('No records found', style: Theme.of(context).textTheme.headlineSmall),
+          Text(
+            'No records found',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
           const SizedBox(height: 8),
-          Text('Try adjusting your filters or date range', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.outline)),
+          Text(
+            'Try adjusting your filters or date range',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.outline,
+            ),
+          ),
         ],
       ),
     );
   }
 }
-
-// =============================
-// lib/admin/panel/models.dart
-// =============================
-
-// =============================
-// lib/admin/panel/utils.dart
-// =============================
-
-// =============================
-// lib/admin/panel/widgets/filter_panel.dart
-// =============================
-
-// =============================
-// lib/admin/panel/widgets/group_card.dart
-// =============================
-
-// =============================
-// lib/admin/panel/widgets/record_tile.dart
-// =============================
-
-// =============================
-// lib/admin/panel/widgets/summary_panel.dart
-// =============================
-
-// =============================
-// lib/admin/panel/widgets/load_more.dart
-// =============================
-

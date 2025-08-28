@@ -1,5 +1,5 @@
-import 'package:attendance_punch/admin/panel/admin_panel.dart';
-import 'package:attendance_punch/screens/home.dart';
+import 'package:attendance_tracker/admin/panel/admin_panel.dart';
+import 'package:attendance_tracker/screens/home.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -7,8 +7,9 @@ class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
   static const Set<String> _adminAllowlist = {
-    'pamacospares@gmail.com',
+    'pamacospares@gmail.com', 
     'pamacomkb@gmail.com',
+    "aneesyarima@gmail.com",
   };
 
   @override

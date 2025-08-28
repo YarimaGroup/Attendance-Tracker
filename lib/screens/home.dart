@@ -1,10 +1,11 @@
 import 'dart:async';
-import 'package:attendance_punch/model/attendance_event.dart';
-import 'package:attendance_punch/repository/attendance_repository.dart';
-import 'package:attendance_punch/services/geolocation_service.dart';
-import 'package:attendance_punch/services/media_service.dart';
-import 'package:attendance_punch/widgets/summary_card.dart';
-import 'package:attendance_punch/widgets/event_detail.dart';
+import 'package:attendance_tracker/model/attendance_event.dart';
+import 'package:attendance_tracker/repository/attendance_repository.dart';
+import 'package:attendance_tracker/services/geolocation_service.dart';
+import 'package:attendance_tracker/services/media_service.dart';
+import 'package:attendance_tracker/widgets/responsive_widget.dart';
+import 'package:attendance_tracker/widgets/summary_card.dart';
+import 'package:attendance_tracker/widgets/event_detail.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -301,7 +302,7 @@ class _HomeScreenState extends State<HomeScreen> {
           },
           child: CustomScrollView(
             slivers: [
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                   child: Row(
@@ -338,7 +339,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
 
               // Status line (animated)
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 200),
                   child: _status == null
@@ -362,7 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
               // Punch buttons (only today)
               if (_isToday())
-                SliverToBoxAdapter(
+                SliverMaxWidth(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Row(
@@ -403,8 +404,8 @@ class _HomeScreenState extends State<HomeScreen> {
               if (_isToday())
                 const SliverToBoxAdapter(child: SizedBox(height: 16)),
 
-              // Date nav + picker
-              SliverToBoxAdapter(
+              // DateSliverMaxWidth nav + picker
+              SliverMaxWidth(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: InkWell(
@@ -477,7 +478,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SliverToBoxAdapter(child: SizedBox(height: 16)),
 
               // Summary (fade in)
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: AnimatedOpacity(
@@ -490,7 +491,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SliverToBoxAdapter(child: SizedBox(height: 16)),
 
               // Header row with count
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Row(
@@ -531,14 +532,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
               // Events list (paged)
               if (_initialLoading)
-                const SliverToBoxAdapter(
+                const SliverMaxWidth(
                   child: Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16),
                     child: _SkeletonList(),
                   ),
                 )
               else if (_events.isEmpty)
-                SliverToBoxAdapter(
+                SliverMaxWidth(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: _EmptyState(
@@ -565,7 +566,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
 
               // Load more indicator / spacer
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   child: Center(

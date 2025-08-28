@@ -112,6 +112,8 @@ class AttendanceRepository {
       'hasPhoto': true,
       'photoDocId': 'photo',
       'thumb': thumb,
+      // NEW: Firestore TTL – auto-delete after 45 days
+      'ttlAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 45))),
     };
 
     await docRef.set(mainData);
@@ -119,6 +121,8 @@ class AttendanceRepository {
       'photo': photo,
       'photoMime': 'image/jpeg',
       'createdAt': timestamp,
+      // NEW: TTL for subcollection docs too
+      'ttlAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 45))),
     });
 
     final totalDocSize = photo.lengthInBytes + 1000;

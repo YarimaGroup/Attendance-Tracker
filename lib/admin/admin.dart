@@ -1,7 +1,7 @@
 // import 'dart:async';
 // import 'dart:typed_data';
-// import 'package:attendance_punch/model/attendance_event.dart';
-// import 'package:attendance_punch/widgets/event_detail.dart';
+// import 'package:attendance_tracker/model/attendance_event.dart';
+// import 'package:attendance_tracker/widgets/event_detail.dart';
 // import 'package:cloud_firestore/cloud_firestore.dart'
 //     show
 //         FirebaseFirestore,

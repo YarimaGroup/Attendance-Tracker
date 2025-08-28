@@ -1,4 +1,5 @@
-import 'package:attendance_punch/model/attendance_event.dart';
+import 'package:attendance_tracker/model/attendance_event.dart';
+import 'package:attendance_tracker/widgets/responsive_widget.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'
     show FirebaseFirestore, Blob;
 import 'package:flutter/material.dart';
@@ -75,7 +76,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
     final color = e.type == 'IN' ? Colors.green : Colors.orange;
     final typeIcon = e.type == 'IN' ? Icons.login : Icons.logout;
 
-    return Scaffold(
+    return ResponsiveScaffold(
       body: FutureBuilder<_EventMedia>(
         future: _loadMedia(),
         builder: (context, snap) {
@@ -144,7 +145,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
                 ),
               ),
 
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                   child: Row(
@@ -194,7 +195,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
                 ),
               ),
 
-              SliverToBoxAdapter(
+              SliverMaxWidth(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Card(
@@ -275,7 +276,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
                 ),
               ),
 
-              const SliverToBoxAdapter(child: SizedBox(height: 24)),
+              const SliverMaxWidth(child: SizedBox(height: 24)),
             ],
           );
         },

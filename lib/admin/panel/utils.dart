@@ -1,5 +1,5 @@
 import 'dart:typed_data';
-import 'package:attendance_punch/admin/panel/model.dart';
+import 'package:attendance_tracker/admin/panel/model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp, QueryDocumentSnapshot, Blob;
 import 'package:intl/intl.dart';
 

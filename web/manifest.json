@@ -1,6 +1,6 @@
 {
-    "name": "attendance_punch",
-    "short_name": "attendance_punch",
+    "name": "attendance_tracker",
+    "short_name": "attendance_tracker",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

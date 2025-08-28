@@ -1,4 +1,4 @@
-import 'package:attendance_punch/model/attendance_event.dart';
+import 'package:attendance_tracker/model/attendance_event.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'event_detail.dart';
