@@ -36,7 +36,7 @@ class _AdminPanelState extends State<AdminPanel>
   final _emailCtrl = TextEditingController();
   bool _groupByUser = true;
   bool _showFilters = false;
-
+  DateTime _currentDate = DateTime.now();
   // Paging
   static const int _pageSize = 30;
   bool _loading = false;
@@ -62,6 +62,7 @@ class _AdminPanelState extends State<AdminPanel>
     super.initState();
     _emailCtrl.addListener(_onEmailChanged);
     _runInitialQuery();
+    _setCurrentDate(DateTime.now());
   }
 
   @override
@@ -102,36 +103,55 @@ class _AdminPanelState extends State<AdminPanel>
   }
 
   Future<void> _runInitialQuery() async {
+    if (!mounted) return;
     setState(() {
       _rows.clear();
       _hasMore = true;
       _lastDoc = null;
       _loading = true;
     });
+
     try {
       final snap = await _buildQuery().get();
-      setState(() {
-        _rows.addAll(snap.docs);
-        if (snap.docs.isNotEmpty) _lastDoc = snap.docs.last;
-        _hasMore = snap.docs.length == _pageSize;
-      });
+
+      if (mounted) {
+        setState(() {
+          final seen = <String>{};
+          _rows
+            ..clear()
+            ..addAll(snap.docs.where((d) => seen.add(d.id))); // only unique IDs
+          if (_rows.isNotEmpty) _lastDoc = _rows.last;
+          _hasMore = snap.docs.length == _pageSize;
+        });
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
   Future<void> _loadMore() async {
-    if (_loading || !_hasMore) return;
+    if (_loading || !_hasMore || !mounted) return;
+
     setState(() => _loading = true);
+
     try {
       final snap = await _buildQuery().get();
-      setState(() {
-        _rows.addAll(snap.docs);
-        if (snap.docs.isNotEmpty) _lastDoc = snap.docs.last;
-        _hasMore = snap.docs.length == _pageSize;
-      });
+
+      if (mounted) {
+        setState(() {
+          final seen = _rows.map((d) => d.id).toSet();
+          final newDocs = snap.docs.where((d) => !seen.contains(d.id));
+          _rows.addAll(newDocs);
+          if (_rows.isNotEmpty) _lastDoc = _rows.last;
+          _hasMore = snap.docs.length == _pageSize;
+        });
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -190,6 +210,35 @@ class _AdminPanelState extends State<AdminPanel>
     if (ok == true) await FirebaseAuth.instance.signOut();
   }
 
+  bool get _isToday {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final cd = DateTime(
+      _currentDate.year,
+      _currentDate.month,
+      _currentDate.day,
+    );
+    return cd == today;
+  }
+
+  void _setCurrentDate(DateTime d) {
+    final day = DateTime(d.year, d.month, d.day);
+    setState(() {
+      _currentDate = day;
+      _from = day;
+      _to = day;
+    });
+    _runInitialQuery();
+  }
+
+  void _shiftByDays(int days) {
+    final next = _currentDate.add(Duration(days: days));
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final clamped = next.isAfter(today) ? today : next;
+    _setCurrentDate(clamped);
+  }
+
   @override
   Widget build(BuildContext context) {
     final grouped = _groupByUser ? buildGroups(_rows) : null;
@@ -243,15 +292,53 @@ class _AdminPanelState extends State<AdminPanel>
                 ),
               ),
 
-            if (_rows.isNotEmpty && !_loading)
-              SliverMaxWidth(
-                child: SummaryPanel(
-                  rows: _rows,
-                  groupByUser: _groupByUser,
-                  from: _from,
-                  to: _to,
+            SliverMaxWidth(
+              child: SummaryPanel(
+                rows: _rows,
+                groupByUser: _groupByUser,
+                from: _from,
+                to: _to,
+              ),
+            ),
+            SliverMaxWidth(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton(
+                      tooltip: 'Previous day',
+                      icon: const Icon(Icons.chevron_left),
+                      onPressed: _loading ? null : () => _shiftByDays(-1),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _dfDate.format(_currentDate), // e.g., "Aug 29, 2025"
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Next day',
+                      icon: const Icon(Icons.chevron_right),
+                      onPressed: (_loading || _isToday)
+                          ? null
+                          : () => _shiftByDays(1),
+                    ),
+                    const SizedBox(width: 12),
+                    // Optional: quick "Today" chip
+                    ActionChip(
+                      label: const Text('Today'),
+                      onPressed: (_loading || _isToday)
+                          ? null
+                          : () => _setCurrentDate(DateTime.now()),
+                    ),
+                  ],
                 ),
               ),
+            ),
 
             if (_loading && _rows.isEmpty)
               const SliverFillRemaining(
@@ -341,6 +428,7 @@ class _AdminPanelState extends State<AdminPanel>
       context,
       MaterialPageRoute(
         builder: (_) => EventDetailPage(
+          canDelete: true,
           recordId: doc.id,
           event: AttendanceEvent(
             type: type,
