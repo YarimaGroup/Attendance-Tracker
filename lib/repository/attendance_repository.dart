@@ -1,5 +1,6 @@
 import 'dart:typed_data';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'
+    show FirebaseFirestore, FieldValue, Timestamp, Blob, Query;
 import 'package:uuid/uuid.dart';
 import '../model/attendance_event.dart';
 
@@ -83,53 +84,72 @@ class AttendanceRepository {
     );
   }
 
-  // repository/attendance_repository.dart
   Future<void> createPunch({
-    required String type,
+    required String type, // 'IN' | 'OUT'
     required String uid,
     required Map<String, dynamic> location,
     required String address,
     required Uint8List photo,
     required Uint8List thumb,
-    String? userEmail, // NEW
-    String? userDisplayName, // NEW
+    String? userEmail,
+    String? userDisplayName,
   }) async {
+    // sanitize numbers (Firestore rejects NaN/Infinity)
+    double? finite(num? v) {
+      if (v == null) return null;
+      final d = v.toDouble();
+      return d.isFinite ? d : null;
+    }
+
+    final safeLocation = <String, dynamic>{
+      if (finite(location['lat']) != null) 'lat': finite(location['lat']),
+      if (finite(location['lng']) != null) 'lng': finite(location['lng']),
+      if (finite(location['accuracyM']) != null)
+        'accuracyM': finite(location['accuracyM']),
+    };
+
+    // size guard before writes
+    final approxDocSize = photo.lengthInBytes + 1000;
+    if (approxDocSize > 1048576) {
+      throw Exception(
+        'Compressed image still too large: $approxDocSize bytes. Try again.',
+      );
+    }
+
     final recordId = _uuid.v4();
     final docRef = _db.collection('attendanceRecords').doc(recordId);
-    final timestamp = FieldValue.serverTimestamp();
+    final tsServer = FieldValue.serverTimestamp();
+    final ttl = Timestamp.fromDate(
+      DateTime.now().add(const Duration(days: 45)),
+    );
 
     final mainData = {
       'uid': uid,
-      'userEmail': userEmail ?? '', // NEW
-      'userDisplayName': userDisplayName ?? '', // NEW
+      'userEmail': userEmail ?? '',
+      'userDisplayName': userDisplayName ?? '',
       'type': type,
       'status': 'SYNCED',
-      'capturedAt': timestamp,
-      'createdAt': timestamp,
+      'capturedAt': tsServer,
+      'createdAt': tsServer,
       'timezone': 'Asia/Kolkata',
-      'location': location,
+      'location': safeLocation,
       'address': address,
       'hasPhoto': true,
       'photoDocId': 'photo',
-      'thumb': thumb,
-      // NEW: Firestore TTL – auto-delete after 45 days
-      'ttlAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 45))),
+      // store thumbnail as Blob (constructor, not fromBytes)
+      'thumb': Blob(thumb),
+      'ttlAt': ttl,
+    };
+
+    final mediaData = {
+      // full photo as Blob
+      'photo': Blob(photo),
+      'photoMime': 'image/jpeg',
+      'createdAt': tsServer,
+      'ttlAt': ttl,
     };
 
     await docRef.set(mainData);
-    await docRef.collection('media').doc('photo').set({
-      'photo': photo,
-      'photoMime': 'image/jpeg',
-      'createdAt': timestamp,
-      // NEW: TTL for subcollection docs too
-      'ttlAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 45))),
-    });
-
-    final totalDocSize = photo.lengthInBytes + 1000;
-    if (totalDocSize > 1048576) {
-      throw Exception(
-        'Compressed image still too large: $totalDocSize bytes. Try again.',
-      );
-    }
+    await docRef.collection('media').doc('photo').set(mediaData);
   }
 }
