@@ -2,6 +2,7 @@ import 'package:attendance_tracker/model/attendance_event.dart';
 import 'package:attendance_tracker/widgets/responsive_widget.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'
     show FirebaseFirestore, Blob;
+import 'package:firebase_auth/firebase_auth.dart'; // NEW
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -9,11 +10,12 @@ import 'package:intl/intl.dart';
 class EventDetailPage extends StatefulWidget {
   final String recordId;
   final AttendanceEvent event;
-
+  final bool canDelete;
   const EventDetailPage({
     super.key,
     required this.recordId,
     required this.event,
+    this.canDelete = false,
   });
 
   @override
@@ -22,6 +24,26 @@ class EventDetailPage extends StatefulWidget {
 
 class _EventDetailPageState extends State<EventDetailPage> {
   final _db = FirebaseFirestore.instance;
+
+  bool? _isAdmin; // NEW
+  bool _deleting = false; // NEW
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAdminFlag(); // NEW
+  }
+
+  Future<void> _loadAdminFlag() async {
+    try {
+      final u = FirebaseAuth.instance.currentUser;
+      if (u == null) return setState(() => _isAdmin = false);
+      final token = await u.getIdTokenResult(true);
+      setState(() => _isAdmin = token.claims?['admin'] == true);
+    } catch (_) {
+      setState(() => _isAdmin = false);
+    }
+  }
 
   Future<_EventMedia> _loadMedia() async {
     final docRef = _db.collection('attendanceRecords').doc(widget.recordId);
@@ -70,13 +92,103 @@ class _EventDetailPageState extends State<EventDetailPage> {
     );
   }
 
+  // NEW: admin-only delete flow
+  Future<void> _confirmAndDelete() async {
+    if (_deleting) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete this record?'),
+        content: const Text(
+          'This will permanently delete the attendance record and its media. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _deleting = true);
+    try {
+      final ref = _db.collection('attendanceRecords').doc(widget.recordId);
+
+      // delete subcollections first (best-effort)
+      final media = await ref.collection('media').get();
+      for (final d in media.docs) {
+        await d.reference.delete();
+      }
+      final chunks = await ref.collection('mediaChunks').get();
+      for (final d in chunks.docs) {
+        await d.reference.delete();
+      }
+      await ref.delete();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Record deleted'),
+        ),
+      );
+      Navigator.of(context).maybePop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          showCloseIcon: true,
+          content: Text('Delete failed: $e'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final e = widget.event;
     final color = e.type == 'IN' ? Colors.green : Colors.orange;
     final typeIcon = e.type == 'IN' ? Icons.login : Icons.logout;
+    // show delete if admin by token OR caller explicitly allowed it
+    final allowDelete = widget.canDelete || (_isAdmin == true);
 
-    return ResponsiveScaffold(
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Attendance Details'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        actions: [
+          if (allowDelete)
+            IconButton(
+              tooltip: 'Delete record',
+              icon: _deleting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete_forever_outlined),
+              onPressed: _deleting ? null : _confirmAndDelete,
+            ),
+        ],
+        bottom: _deleting
+            ? const PreferredSize(
+                preferredSize: Size.fromHeight(3),
+                child: LinearProgressIndicator(minHeight: 3),
+              )
+            : null,
+      ),
       body: FutureBuilder<_EventMedia>(
         future: _loadMedia(),
         builder: (context, snap) {
@@ -84,13 +196,10 @@ class _EventDetailPageState extends State<EventDetailPage> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Scaffold(
-              appBar: AppBar(title: const Text('Attendance Details')),
-              body: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text('Could not load media: ${snap.error}'),
-                ),
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('Could not load media: ${snap.error}'),
               ),
             );
           }
@@ -101,12 +210,9 @@ class _EventDetailPageState extends State<EventDetailPage> {
             slivers: [
               SliverAppBar(
                 pinned: true,
-                expandedHeight: 300,
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
-                title: const Text('Attendance Details'),
+                expandedHeight: 400,
+                automaticallyImplyLeading: false, // leading handled above
+                title: const Text(''),
                 flexibleSpace: FlexibleSpaceBar(
                   background: media.photoBytes != null
                       ? Hero(
@@ -195,7 +301,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
                 ),
               ),
 
-              SliverMaxWidth(
+              SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Card(

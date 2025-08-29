@@ -1,8 +1,3 @@
-// =============================
-// lib/ui/responsive.dart
-// A tiny responsive toolkit to standardize paddings and widths
-// across all screens (Home, Admin, Event Detail, Auth).
-// =============================
 import 'package:flutter/material.dart';
 
 class Breakpoints {

@@ -28,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   DateTime _selectedDate = DateTime.now();
   final List<AttendanceEvent> _events = [];
+  final Set<String> _seenIds = <String>{};
 
   // Paging state
   bool _initialLoading = true;
@@ -40,6 +41,16 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadInitial();
     _prewarmLocation();
+  }
+
+  void _appendUnique(List<AttendanceEvent> incoming) {
+    // If repo can return same logical record with a different id,
+    // you can switch the key below to a composite like "$id|${time.millisecondsSinceEpoch}".
+    for (final e in incoming) {
+      if (_seenIds.add(e.id)) {
+        _events.add(e);
+      }
+    }
   }
 
   Future<void> _prewarmLocation() async {
@@ -74,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _initialLoading = true;
       _events.clear();
+      _seenIds.clear(); // <-- reset seen ids
       _cursor = null;
       _hasMore = true;
     });
@@ -84,7 +96,7 @@ class _HomeScreenState extends State<HomeScreen> {
         limit: 20,
       );
       setState(() {
-        _events.addAll(page.events);
+        _appendUnique(page.events); // <-- unique add
         _cursor = page.nextCursor;
         _hasMore = page.hasMore;
       });
@@ -108,7 +120,7 @@ class _HomeScreenState extends State<HomeScreen> {
         startAfter: _cursor,
       );
       setState(() {
-        _events.addAll(page.events);
+        _appendUnique(page.events); // <-- unique add
         _cursor = page.nextCursor;
         _hasMore = page.hasMore;
       });
