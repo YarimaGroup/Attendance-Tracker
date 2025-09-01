@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'package:attendance_tracker/admin/panel/model.dart';
 import 'package:attendance_tracker/admin/panel/utils.dart';
-import 'package:attendance_tracker/admin/panel/widgets/filter_panel.dart';
-import 'package:attendance_tracker/admin/panel/widgets/group_card.dart';
-import 'package:attendance_tracker/admin/panel/widgets/load_more.dart';
-import 'package:attendance_tracker/admin/panel/widgets/record_tile.dart';
-import 'package:attendance_tracker/admin/panel/widgets/summary_panel.dart';
+import 'package:attendance_tracker/admin/widgets/filter_panel.dart';
+import 'package:attendance_tracker/admin/widgets/group_card.dart';
+import 'package:attendance_tracker/admin/widgets/load_more.dart';
+import 'package:attendance_tracker/admin/widgets/record_tile.dart';
+import 'package:attendance_tracker/admin/widgets/summary_panel.dart';
 import 'package:attendance_tracker/model/attendance_event.dart';
 import 'package:attendance_tracker/widgets/event_detail.dart';
 import 'package:attendance_tracker/widgets/responsive_widget.dart';

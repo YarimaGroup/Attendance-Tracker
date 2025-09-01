@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'
     show QueryDocumentSnapshot, Timestamp;
-import '../../panel/utils.dart';
+import '../panel/utils.dart';
 
 class RecordTile extends StatelessWidget {
   final QueryDocumentSnapshot<Map<String, dynamic>> doc;

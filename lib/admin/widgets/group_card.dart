@@ -2,7 +2,7 @@ import 'package:attendance_tracker/admin/panel/model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../../panel/utils.dart';
+import '../panel/utils.dart';
 
 class GroupCard extends StatelessWidget {
   final GroupInfo group;
