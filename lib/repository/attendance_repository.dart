@@ -93,6 +93,9 @@ class AttendanceRepository {
     required Uint8List thumb,
     String? userEmail,
     String? userDisplayName,
+    required String employeeId,
+    required String employeeName,
+    String? orgId,
   }) async {
     // sanitize numbers (Firestore rejects NaN/Infinity)
     double? finite(num? v) {
@@ -139,6 +142,9 @@ class AttendanceRepository {
       // store thumbnail as Blob (constructor, not fromBytes)
       'thumb': Blob(thumb),
       'ttlAt': ttl,
+      'employeeId': employeeId,
+      'employeeName': employeeName,
+      if (orgId != null) 'orgId': orgId,
     };
 
     final mediaData = {

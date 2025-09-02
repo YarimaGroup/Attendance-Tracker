@@ -7,15 +7,20 @@ class AttendanceEvent {
   final Map<String, dynamic>? location;
   final String? address;
 
+  // NEW (for display & reports)
+  final String? employeeId;
+  final String? employeeName;
+
   AttendanceEvent({
     required this.type,
     required this.time,
     required this.id,
     this.location,
     this.address,
+    this.employeeId, // NEW
+    this.employeeName, // NEW
   });
 
-  // Add this factory:
   factory AttendanceEvent.fromDoc(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -27,6 +32,8 @@ class AttendanceEvent {
       time: (ts ?? Timestamp.now()).toDate(),
       location: data['location'] as Map<String, dynamic>?,
       address: data['address'] as String?,
+      employeeId: data['employeeId'] as String?, // NEW
+      employeeName: data['employeeName'] as String?, // NEW
     );
   }
 }

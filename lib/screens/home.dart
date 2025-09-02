@@ -3,6 +3,7 @@ import 'package:attendance_tracker/model/attendance_event.dart';
 import 'package:attendance_tracker/repository/attendance_repository.dart';
 import 'package:attendance_tracker/services/geolocation_service.dart';
 import 'package:attendance_tracker/services/media_service.dart';
+import 'package:attendance_tracker/widgets/employee_picker_sheet.dart';
 import 'package:attendance_tracker/widgets/responsive_widget.dart';
 import 'package:attendance_tracker/widgets/summary_card.dart';
 import 'package:attendance_tracker/widgets/event_detail.dart';
@@ -160,6 +161,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _punch(String type) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+    final picked = await showEmployeePickerSheet(context, orgId: null);
+    if (picked == null) return; // user cancelled
 
     setState(() {
       _busy = true;
@@ -192,8 +195,12 @@ class _HomeScreenState extends State<HomeScreen> {
       await _repo.createPunch(
         type: type,
         uid: user.uid,
-        userEmail: user.email, // NEW
-        userDisplayName: user.displayName, // NEW
+        userEmail: user.email,
+        userDisplayName: user.displayName,
+        employeeId: picked.id,
+        employeeName: picked.name,
+        // Optional: persist orgId on the record too:
+        orgId: picked.orgId,
         location: {
           'lat': pos.latitude,
           'lng': pos.longitude,
@@ -277,6 +284,94 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirmed == true) {
       await FirebaseAuth.instance.signOut();
     }
+  }
+
+  String _fmtDur(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    return '${h}h ${m.toString().padLeft(2, '0')}m';
+  }
+
+  /// Build per-employee totals from `_events` for the selected date.
+  /// Assumes `_events` are only for that date (your repo already filters by day).
+  List<_EmpTotal> _computeEmployeeTotals() {
+    // Group by employee (prefer ID; fall back to name)
+    final Map<String, _EmpBucket> buckets = {};
+
+    for (final e in _events) {
+      final empKey =
+          e.employeeId ??
+          (e.employeeName != null ? 'name:${e.employeeName}' : 'unassigned');
+      final b = buckets.putIfAbsent(
+        empKey,
+        () => _EmpBucket(
+          employeeId: e.employeeId,
+          employeeName: e.employeeName ?? (e.employeeId ?? 'Unassigned'),
+        ),
+      );
+      b.events.add(e);
+    }
+
+    final now = DateTime.now();
+    final startOfDay = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+    );
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+
+    final List<_EmpTotal> out = [];
+    for (final b in buckets.values) {
+      // Sort by time just in case
+      b.events.sort((a, z) => a.time.compareTo(z.time));
+
+      Duration sum = Duration.zero;
+      DateTime? openIn;
+
+      for (final ev in b.events) {
+        if (ev.type == 'IN') {
+          if (openIn == null) {
+            openIn = ev.time;
+          } else {
+            // Two INs in a row: close the previous open shift at this IN time
+            if (ev.time.isAfter(openIn)) {
+              sum += ev.time.difference(openIn);
+            }
+            openIn = ev.time; // start new open shift
+          }
+        } else if (ev.type == 'OUT') {
+          if (openIn != null) {
+            final outTime = ev.time;
+            if (outTime.isAfter(openIn)) {
+              sum += outTime.difference(openIn);
+            }
+            openIn = null;
+          } else {
+            // Stray OUT without prior IN -> ignore
+          }
+        }
+      }
+
+      // If there's an open IN with no OUT:
+      if (openIn != null) {
+        final boundary = _isToday() ? now : endOfDay;
+        if (boundary.isAfter(openIn)) {
+          sum += boundary.difference(openIn);
+        }
+      }
+
+      out.add(
+        _EmpTotal(
+          employeeId: b.employeeId,
+          employeeName: b.employeeName,
+          duration: sum,
+        ),
+      );
+    }
+
+    // Sort longest first
+    out.sort((a, z) => z.duration.compareTo(a.duration));
+    return out;
   }
 
   @override
@@ -501,7 +596,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 16)),
-
+              // NEW: Working time by employee
+              SliverMaxWidth(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _events.isEmpty
+                      ? const SizedBox.shrink()
+                      : _EmployeeTotalsCard(
+                          totals: _computeEmployeeTotals(),
+                          fmt: _fmtDur,
+                        ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
               // Header row with count
               SliverMaxWidth(
                 child: Padding(
@@ -667,6 +774,15 @@ class _AnimatedEventTile extends StatelessWidget {
                         ),
                       ],
                     ),
+                    if (event.employeeName != null ||
+                        event.employeeId != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '${event.employeeName ?? ''}${event.employeeName != null && event.employeeId != null ? '' : ''}',
+                        style: TextStyle(fontSize: 15, color: Colors.black87),
+                      ),
+                    ],
+
                     if (event.address != null) ...[
                       const SizedBox(height: 4),
                       Row(
@@ -800,6 +916,83 @@ class _SkeletonTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _EmpBucket {
+  final String? employeeId;
+  final String employeeName;
+  final List<AttendanceEvent> events = [];
+  _EmpBucket({required this.employeeId, required this.employeeName});
+}
+
+class _EmpTotal {
+  final String? employeeId;
+  final String employeeName;
+  final Duration duration;
+  _EmpTotal({
+    required this.employeeId,
+    required this.employeeName,
+    required this.duration,
+  });
+}
+
+class _EmployeeTotalsCard extends StatelessWidget {
+  final List<_EmpTotal> totals;
+  final String Function(Duration) fmt;
+  const _EmployeeTotalsCard({required this.totals, required this.fmt});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final totalAll = totals.fold<Duration>(
+      Duration.zero,
+      (acc, t) => acc + t.duration,
+    );
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          children: [
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.groups_outlined),
+              title: const Text('Working time by employee'),
+              trailing: Text(
+                fmt(totalAll),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            ...totals.map(
+              (t) => ListTile(
+                dense: true,
+                leading: const Icon(Icons.person_outline),
+                title: Text(
+                  t.employeeName,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: t.employeeId == null
+                    ? null
+                    : Text(t.employeeId!, style: const TextStyle(fontSize: 12)),
+                trailing: Text(
+                  fmt(t.duration),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
