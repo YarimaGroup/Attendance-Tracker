@@ -7,7 +7,6 @@ class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
   static const Set<String> _adminAllowlist = {
-    'pamacospares@gmail.com', 
     'pamacomkb@gmail.com',
     "aneesyarima@gmail.com",
   };
@@ -46,7 +45,7 @@ class AuthGate extends StatelessWidget {
             // Optional: debug prints while wiring this up
             // debugPrint('claims: ${snap.data?.claims} | email: $email | isAdmin=$isAdmin');
 
-            return isAdmin ? const AdminPanel() : const HomeScreen();
+            return isAdmin ? const AdminPanelScreen() : const HomeScreen();
           },
         );
       },

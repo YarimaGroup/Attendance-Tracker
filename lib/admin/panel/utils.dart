@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:attendance_tracker/admin/panel/model.dart';
-import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp, QueryDocumentSnapshot, Blob;
+import 'package:cloud_firestore/cloud_firestore.dart'
+    show Timestamp, QueryDocumentSnapshot, Blob;
 import 'package:intl/intl.dart';
 
 String rangeLabel(DateTime a, DateTime b) {
@@ -39,21 +40,33 @@ Uint8List? decodeThumb(dynamic t) {
   return null;
 }
 
-Duration calculateWorkingTime(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+Duration calculateWorkingTime(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+) {
   Duration totalTime = Duration.zero;
-  final Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>> dayGroups = {};
+  final Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+  dayGroups = {};
 
   for (final doc in docs) {
     final data = doc.data();
-    final ts = (data['capturedAt'] as Timestamp?) ?? (data['createdAt'] as Timestamp?) ?? Timestamp.fromMillisecondsSinceEpoch(0);
+    final ts =
+        (data['capturedAt'] as Timestamp?) ??
+        (data['createdAt'] as Timestamp?) ??
+        Timestamp.fromMillisecondsSinceEpoch(0);
     final dayKey = DateFormat('yyyy-MM-dd').format(ts.toDate());
     dayGroups.putIfAbsent(dayKey, () => []).add(doc);
   }
 
   for (final day in dayGroups.values) {
     day.sort((a, b) {
-      final ta = (a.data()['capturedAt'] as Timestamp?) ?? (a.data()['createdAt'] as Timestamp?) ?? Timestamp.fromMillisecondsSinceEpoch(0);
-      final tb = (b.data()['capturedAt'] as Timestamp?) ?? (b.data()['createdAt'] as Timestamp?) ?? Timestamp.fromMillisecondsSinceEpoch(0);
+      final ta =
+          (a.data()['capturedAt'] as Timestamp?) ??
+          (a.data()['createdAt'] as Timestamp?) ??
+          Timestamp.fromMillisecondsSinceEpoch(0);
+      final tb =
+          (b.data()['capturedAt'] as Timestamp?) ??
+          (b.data()['createdAt'] as Timestamp?) ??
+          Timestamp.fromMillisecondsSinceEpoch(0);
       return ta.compareTo(tb);
     });
 
@@ -61,7 +74,10 @@ Duration calculateWorkingTime(List<QueryDocumentSnapshot<Map<String, dynamic>>> 
     for (final rec in day) {
       final d = rec.data();
       final type = d['type'] as String?;
-      final ts = (d['capturedAt'] as Timestamp?) ?? (d['createdAt'] as Timestamp?) ?? Timestamp.fromMillisecondsSinceEpoch(0);
+      final ts =
+          (d['capturedAt'] as Timestamp?) ??
+          (d['createdAt'] as Timestamp?) ??
+          Timestamp.fromMillisecondsSinceEpoch(0);
       final t = ts.toDate();
       if (type == 'IN') {
         inTime = t;
@@ -88,32 +104,61 @@ String workingDaysText(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
   final s = <String>{};
   for (final doc in docs) {
     final data = doc.data();
-    final ts = (data['capturedAt'] as Timestamp?) ?? (data['createdAt'] as Timestamp?) ?? Timestamp.fromMillisecondsSinceEpoch(0);
+    final ts =
+        (data['capturedAt'] as Timestamp?) ??
+        (data['createdAt'] as Timestamp?) ??
+        Timestamp.fromMillisecondsSinceEpoch(0);
     s.add(DateFormat('yyyy-MM-dd').format(ts.toDate()));
   }
   final n = s.length;
   return n == 1 ? '1 day' : '$n days';
 }
 
-List<GroupInfo> buildGroups(List<QueryDocumentSnapshot<Map<String, dynamic>>> rows) {
+List<GroupInfo> buildGroups(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> rows,
+) {
   final Map<String, GroupInfo> map = {};
   for (final doc in rows) {
     final data = doc.data();
     final id = groupIdFor(data);
     final name = primaryName(data);
     final email = emailOf(data);
-    map.putIfAbsent(id, () => GroupInfo(id: id, title: name, subtitle: email, docs: [], workingTime: Duration.zero)).docs.add(doc);
+    map
+        .putIfAbsent(
+          id,
+          () => GroupInfo(
+            id: id,
+            title: name,
+            subtitle: email,
+            docs: [],
+            workingTime: Duration.zero,
+          ),
+        )
+        .docs
+        .add(doc);
   }
   final groups = map.values.toList()
     ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
 
   for (final g in groups) {
     g.docs.sort((a, b) {
-      final ta = (a.data()['capturedAt'] as Timestamp?) ?? (a.data()['createdAt'] as Timestamp?) ?? Timestamp.fromMillisecondsSinceEpoch(0);
-      final tb = (b.data()['capturedAt'] as Timestamp?) ?? (b.data()['createdAt'] as Timestamp?) ?? Timestamp.fromMillisecondsSinceEpoch(0);
+      final ta =
+          (a.data()['capturedAt'] as Timestamp?) ??
+          (a.data()['createdAt'] as Timestamp?) ??
+          Timestamp.fromMillisecondsSinceEpoch(0);
+      final tb =
+          (b.data()['capturedAt'] as Timestamp?) ??
+          (b.data()['createdAt'] as Timestamp?) ??
+          Timestamp.fromMillisecondsSinceEpoch(0);
       return tb.compareTo(ta);
     });
     g.workingTime = calculateWorkingTime(g.docs);
   }
   return groups;
+}
+
+String fmtDurationHm(Duration d) {
+  final h = d.inHours;
+  final m = d.inMinutes.remainder(60);
+  return '${h}h ${m.toString().padLeft(2, '0')}m';
 }
